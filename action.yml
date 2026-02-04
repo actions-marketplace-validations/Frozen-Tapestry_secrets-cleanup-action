@@ -1,0 +1,30 @@
+name: project-secrets-cleanup
+description: "Remove the secret directory created during CI"
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  dir:
+    description: "Directory to remove"
+    required: false
+    default: ".ci-secrets"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cleanup secret directory
+      shell: /bin/bash --noprofile --norc -euo pipefail {0}
+      run: |
+        dir='${{ inputs.dir }}'
+
+        # Basic safety guards
+        [[ -n "$dir" ]] || { echo "dir must not be empty"; exit 1; }
+        case "$dir" in
+          /*) echo "Refusing to remove absolute path: $dir"; exit 1 ;;
+          *".."*) echo "Refusing to remove path containing '..': $dir"; exit 1 ;;
+          "."|"./") echo "Refusing to remove current directory"; exit 1 ;;
+        esac
+
+        # Remove if present
+        rm -r -- "$dir"

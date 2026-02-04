@@ -1,0 +1,142 @@
+name: test project-secrets-cleanup
+
+on:
+  push:
+    branches:
+      - prime
+      - develop
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          # Success cases
+          - name: default_input_removes_default_dir
+            dir: ".ci-secrets"
+            expect_outcome: success
+            prepare: create
+            check_path: ".ci-secrets"
+            expect_exists_after: "no"
+
+          - name: custom_dir_removes_dir
+            dir: ".my-secrets"
+            expect_outcome: success
+            prepare: create
+            check_path: ".my-secrets"
+            expect_exists_after: "no"
+
+          - name: non_existent_dir_is_ok
+            dir: ".ci-secrets-does-not-exist"
+            expect_outcome: success
+            prepare: none
+            check_path: ".ci-secrets-does-not-exist"
+            expect_exists_after: "no"
+
+          # Safety guard failures
+          - name: refuses_absolute_path
+            dir: "/tmp/ci-secrets-abs"
+            expect_outcome: failure
+            prepare: create
+            check_path: "/tmp/ci-secrets-abs"
+            expect_exists_after: "yes"
+
+          - name: refuses_dotdot
+            dir: "../ci-secrets-dotdot"
+            expect_outcome: failure
+            prepare: create
+            check_path: "../ci-secrets-dotdot"
+            expect_exists_after: "yes"
+
+          - name: refuses_current_directory
+            dir: "."
+            expect_outcome: failure
+            prepare: none
+            check_path: "."
+            expect_exists_after: "yes"
+
+          - name: refuses_empty_string
+            dir: ""
+            expect_outcome: failure
+            prepare: none
+            check_path: ""
+            expect_exists_after: "yes"
+
+    name: ${{ matrix.case.name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare test directory (if needed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir='${{ matrix.case.dir }}'
+          prep='${{ matrix.case.prepare }}'
+
+          echo "dir=$dir"
+          echo "prepare=$prep"
+          echo "PWD=$PWD"
+
+          if [[ "$prep" == "create" ]]; then
+            # Create the path; for relative paths, ensure parent exists.
+            mkdir -p -- "$dir"
+            # Drop a marker so we can be confident the directory is the one we created.
+            if [[ "$dir" != "." && "$dir" != "" ]]; then
+              echo "marker" > "$dir/.marker"
+            fi
+            echo "Created: $dir"
+            ls -la -- "$dir" || true
+          else
+            echo "No preparation."
+          fi
+
+      - name: Run composite action
+        id: cleanup
+        continue-on-error: true
+        uses: ./
+        with:
+          dir: ${{ matrix.case.dir }}
+
+      - name: Assert outcome and filesystem state
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected='${{ matrix.case.expect_outcome }}'
+          outcome='${{ steps.cleanup.outcome }}'
+          check_path='${{ matrix.case.check_path }}'
+          expect_exists_after='${{ matrix.case.expect_exists_after }}'
+
+          echo "Expected outcome: $expected"
+          echo "Actual outcome:   $outcome"
+
+          if [[ "$outcome" != "$expected" ]]; then
+            echo "Unexpected step outcome. Expected '$expected' but got '$outcome'."
+            exit 1
+          fi
+
+          if [[ -n "$check_path" && -n "$expect_exists_after" ]]; then
+            if [[ "$expect_exists_after" == "yes" ]]; then
+              if [[ ! -e "$check_path" ]]; then
+                echo "Expected path to still exist, but it does not: $check_path"
+                exit 1
+              fi
+              echo "Path exists as expected: $check_path"
+            elif [[ "$expect_exists_after" == "no" ]]; then
+              if [[ -e "$check_path" ]]; then
+                echo "Expected path to be removed, but it still exists: $check_path"
+                ls -la -- "$check_path" || true
+                exit 1
+              fi
+              echo "Path removed as expected: $check_path"
+            else
+              echo "Unknown expect_exists_after value: $expect_exists_after"
+              exit 1
+            fi
+          else
+            echo "No filesystem assertion for this case."
+          fi
