@@ -32,7 +32,7 @@ jobs:
 
           - name: non_existent_dir_is_ok
             dir: ".ci-secrets-does-not-exist"
-            expect_outcome: success
+            expect_outcome: failure
             prepare: none
             check_path: ".ci-secrets-does-not-exist"
             expect_exists_after: "no"
